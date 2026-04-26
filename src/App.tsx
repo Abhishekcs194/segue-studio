@@ -72,15 +72,28 @@ export default function App() {
 
   const handleLogin = async () => {
     try {
+      console.log('Initiating login...');
       const res = await fetch('/api/auth/url');
       const contentType = res.headers.get('content-type');
       
+      console.log(`Response status: ${res.status}, content-type: ${contentType}`);
+
       if (!contentType || !contentType.includes('application/json')) {
         const text = await res.text();
         console.error('Unexpected response:', text);
+        
+        // Try to ping the server to see if it's there at all
+        try {
+          const pingRes = await fetch('/api-test');
+          const pingText = await pingRes.text();
+          console.log('Ping /api-test result:', pingText);
+        } catch (pingErr) {
+          console.error('Ping /api-test failed:', pingErr);
+        }
+
         setError({ 
           message: `Server returned non-JSON response (${res.status}).`,
-          details: text.substring(0, 1000) // First 1000 chars of the error page
+          details: `Path: /api/auth/url\nStatus: ${res.status}\nBody: ${text.substring(0, 500)}`
         });
         return;
       }

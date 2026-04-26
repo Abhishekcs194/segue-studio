@@ -23,13 +23,22 @@ async function startServer() {
 
   // Request logger for debugging
   app.use((req, res, next) => {
-    console.log(`${req.method} ${req.url}`);
+    const timestamp = new Date().toISOString();
+    console.log(`[${timestamp}] ${req.method} ${req.url}`);
     next();
   });
 
   // Health check
+  app.get('/api-test', (req, res) => {
+    res.send('API TEST OK');
+  });
+
   app.get('/api/ping', (req, res) => {
-    res.json({ status: 'ok', timestamp: new Date().toISOString() });
+    res.json({ status: 'ok', timestamp: new Date().toISOString(), env: { 
+      has_id: !!SPOTIFY_CLIENT_ID,
+      has_secret: !!SPOTIFY_CLIENT_SECRET,
+      app_url: APP_URL
+    }});
   });
 
   // Spotify Auth Logic
