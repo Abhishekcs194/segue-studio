@@ -1,0 +1,6 @@
+{
+  "name": "Segue: Harmonic Playlist Generator",
+  "description": "Create perfect Spotify playlists where every song transitions into the next using harmonic mixing and BPM matching.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
