@@ -27,14 +27,32 @@ async function startServer() {
   };
 
   app.get('/api/auth/url', (req, res) => {
+    console.log('--- Auth Request Started ---');
+    console.log('APP_URL:', APP_URL);
+    console.log('SPOTIFY_CLIENT_ID exists:', !!SPOTIFY_CLIENT_ID);
+    console.log('SPOTIFY_CLIENT_SECRET exists:', !!SPOTIFY_CLIENT_SECRET);
+
+    if (!SPOTIFY_CLIENT_ID || !SPOTIFY_CLIENT_SECRET || !APP_URL) {
+      console.error('Critical Error: Missing environment variables');
+      return res.status(500).json({ 
+        error: 'Server configuration missing. Please check your Secrets for SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET, and APP_URL.' 
+      });
+    }
+
     const scope = 'playlist-modify-public user-read-private user-read-email';
+    const redirectUri = getRedirectUri();
+    console.log('Redirect URI:', redirectUri);
+
     const params = new URLSearchParams({
-      client_id: SPOTIFY_CLIENT_ID!,
+      client_id: SPOTIFY_CLIENT_ID,
       response_type: 'code',
-      redirect_uri: getRedirectUri(),
+      redirect_uri: redirectUri,
       scope: scope,
     });
-    res.json({ url: `https://accounts.spotify.com/authorize?${params.toString()}` });
+    
+    const url = `https://accounts.spotify.com/authorize?${params.toString()}`;
+    console.log('Generated Spotify URL:', url);
+    res.json({ url });
   });
 
   app.get('/auth/callback', async (req, res) => {

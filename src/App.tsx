@@ -73,10 +73,15 @@ export default function App() {
   const handleLogin = async () => {
     try {
       const res = await fetch('/api/auth/url');
-      const { url } = await res.json();
-      window.open(url, 'spotify_login', 'width=600,height=700');
-    } catch (err) {
-      setError('Failed to initiate login');
+      const data = await res.json();
+      
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to initiate login');
+      }
+
+      window.open(data.url, 'spotify_login', 'width=600,height=700');
+    } catch (err: any) {
+      setError(err.message || 'Failed to initiate login');
     }
   };
 
