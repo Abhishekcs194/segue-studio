@@ -272,13 +272,20 @@ async function startServer() {
     res.json({ success: true });
   });
 
-  // Vite Integration
+  // Start listening IMMEDIATELY so the infrastructure can see the app is live
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`READY: Server opening port ${PORT}`);
+  });
+
+  // Vite Integration (starts in background/async)
   if (process.env.NODE_ENV !== 'production') {
+    console.log('INIT: Starting Vite dev server middleware...');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
+    console.log('READY: Vite middleware loaded.');
   } else {
     const distPath = path.join(__dirname, 'dist');
     app.use(express.static(distPath));
@@ -286,13 +293,9 @@ async function startServer() {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
-
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`READY: Server running at http://0.0.0.0:${PORT}`);
-  });
 }
 
-console.log('INIT: Starting startServer()...');
+console.log('INIT: Bootstrapping startServer()...');
 startServer().catch((err) => {
   console.error('FAILED TO START SERVER:', err);
 });
