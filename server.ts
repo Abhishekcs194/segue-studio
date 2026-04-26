@@ -34,35 +34,40 @@ async function startServer() {
   });
 
   app.get('/api/ping', (req, res) => {
-    res.json({ status: 'ok', timestamp: new Date().toISOString(), env: { 
-      has_id: !!SPOTIFY_CLIENT_ID,
-      has_secret: !!SPOTIFY_CLIENT_SECRET,
-      app_url: APP_URL
-    }});
+    res.json({ 
+      status: 'ok', 
+      timestamp: new Date().toISOString(), 
+      env: { 
+        has_id: !!SPOTIFY_CLIENT_ID,
+        has_secret: !!SPOTIFY_CLIENT_SECRET,
+        app_url: APP_URL
+      }
+    });
   });
 
-  // Spotify Auth Logic
-  const getRedirectUri = () => {
-    return `${APP_URL}/auth/callback`;
+  // Dynamic URL helper
+  const getBaseUrl = (req: express.Request) => {
+    if (APP_URL) return APP_URL.replace(/\/$/, '');
+    const protocol = req.headers['x-forwarded-proto'] || 'http';
+    return `${protocol}://${req.headers.host}`;
+  };
+
+  const getRedirectUri = (req: express.Request) => {
+    return `${getBaseUrl(req)}/auth/callback`;
   };
 
   app.get('/api/auth/url', (req, res) => {
     console.log('--- Auth Request Started ---');
-    console.log('APP_URL:', APP_URL);
-    console.log('SPOTIFY_CLIENT_ID exists:', !!SPOTIFY_CLIENT_ID);
-    console.log('SPOTIFY_CLIENT_SECRET exists:', !!SPOTIFY_CLIENT_SECRET);
-
-    if (!SPOTIFY_CLIENT_ID || !SPOTIFY_CLIENT_SECRET || !APP_URL) {
-      console.error('Critical Error: Missing environment variables');
+    
+    if (!SPOTIFY_CLIENT_ID || !SPOTIFY_CLIENT_SECRET) {
       return res.status(500).json({ 
-        error: 'Server configuration missing. Please check your Secrets for SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET, and APP_URL.' 
+        error: 'Spotify credentials missing in environment variables (Secrets).' 
       });
     }
 
     const scope = 'playlist-modify-public user-read-private user-read-email';
-    const redirectUri = getRedirectUri();
-    console.log('Redirect URI:', redirectUri);
-
+    const redirectUri = getRedirectUri(req);
+    
     const params = new URLSearchParams({
       client_id: SPOTIFY_CLIENT_ID,
       response_type: 'code',
@@ -70,32 +75,23 @@ async function startServer() {
       scope: scope,
     });
     
-    const url = `https://accounts.spotify.com/authorize?${params.toString()}`;
-    console.log('Generated Spotify URL:', url);
-    res.json({ url });
+    res.json({ url: `https://accounts.spotify.com/authorize?${params.toString()}` });
   });
 
   app.get('/auth/callback', async (req, res) => {
     const { code } = req.query;
-
-    if (!code) {
-      return res.status(400).send('No code provided');
-    }
+    if (!code) return res.status(400).send('No code provided');
 
     try {
       const response = await axios.post('https://accounts.spotify.com/api/token', 
         new URLSearchParams({
           grant_type: 'authorization_code',
           code: code as string,
-          redirect_uri: getRedirectUri(),
+          redirect_uri: getRedirectUri(req),
           client_id: SPOTIFY_CLIENT_ID!,
           client_secret: SPOTIFY_CLIENT_SECRET!,
         }).toString(),
-        {
-          headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-          },
-        }
+        { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
       );
 
       const { access_token, refresh_token, expires_in } = response.data;
@@ -272,11 +268,6 @@ async function startServer() {
     res.json({ success: true });
   });
 
-  // Start listening IMMEDIATELY so the infrastructure can see the app is live
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`READY: Server opening port ${PORT}`);
-  });
-
   // Vite Integration (starts in background/async)
   if (process.env.NODE_ENV !== 'production') {
     console.log('INIT: Starting Vite dev server middleware...');
@@ -293,6 +284,10 @@ async function startServer() {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
+
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`READY: Server running at http://0.0.0.0:${PORT}`);
+  });
 }
 
 console.log('INIT: Bootstrapping startServer()...');
