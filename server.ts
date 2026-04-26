@@ -21,6 +21,11 @@ async function startServer() {
   app.use(express.json());
   app.use(cookieParser());
 
+  // Health check
+  app.get('/api/ping', (req, res) => {
+    res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  });
+
   // Spotify Auth Logic
   const getRedirectUri = () => {
     return `${APP_URL}/auth/callback`;
@@ -268,8 +273,11 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running at http://0.0.0.0:${PORT}`);
+    console.log(`READY: Server running at http://0.0.0.0:${PORT}`);
   });
 }
 
-startServer();
+console.log('INIT: Starting startServer()...');
+startServer().catch((err) => {
+  console.error('FAILED TO START SERVER:', err);
+});
