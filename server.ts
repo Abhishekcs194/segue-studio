@@ -4,9 +4,8 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import cookieParser from 'cookie-parser';
 import axios from 'axios';
-import dotenv from 'dotenv';
 
-dotenv.config();
+console.log('INIT: server.ts module loading...');
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -46,36 +45,37 @@ async function startServer() {
   });
 
   // Dynamic URL helper
-  const getBaseUrl = (req: express.Request) => {
-    if (APP_URL) return APP_URL.replace(/\/$/, '');
-    const protocol = req.headers['x-forwarded-proto'] || 'http';
-    return `${protocol}://${req.headers.host}`;
-  };
-
   const getRedirectUri = (req: express.Request) => {
-    return `${getBaseUrl(req)}/auth/callback`;
+    // Prefer the actual host the request came from to ensure consistency
+    const protocol = req.headers['x-forwarded-proto'] || 'http';
+    const host = req.headers['x-forwarded-host'] || req.headers.host;
+    const baseUrl = `${protocol}://${host}`;
+    return `${baseUrl}/auth/callback`;
   };
 
   app.get('/api/auth/url', (req, res) => {
-    console.log('--- Auth Request Started ---');
-    
-    if (!SPOTIFY_CLIENT_ID || !SPOTIFY_CLIENT_SECRET) {
-      return res.status(500).json({ 
-        error: 'Spotify credentials missing in environment variables (Secrets).' 
-      });
-    }
+    try {
+      if (!SPOTIFY_CLIENT_ID || !SPOTIFY_CLIENT_SECRET) {
+        return res.status(500).json({ 
+          error: 'Spotify credentials missing. Please add SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET to Secrets.' 
+        });
+      }
 
-    const scope = 'playlist-modify-public user-read-private user-read-email';
-    const redirectUri = getRedirectUri(req);
-    
-    const params = new URLSearchParams({
-      client_id: SPOTIFY_CLIENT_ID,
-      response_type: 'code',
-      redirect_uri: redirectUri,
-      scope: scope,
-    });
-    
-    res.json({ url: `https://accounts.spotify.com/authorize?${params.toString()}` });
+      const scope = 'playlist-modify-public user-read-private user-read-email';
+      const redirectUri = getRedirectUri(req);
+      
+      const params = new URLSearchParams({
+        client_id: SPOTIFY_CLIENT_ID,
+        response_type: 'code',
+        redirect_uri: redirectUri,
+        scope: scope,
+      });
+      
+      res.json({ url: `https://accounts.spotify.com/authorize?${params.toString()}` });
+    } catch (err: any) {
+      console.error('Error generating auth URL:', err);
+      res.status(500).json({ error: 'Failed to generate auth URL', details: err.message });
+    }
   });
 
   app.get('/auth/callback', async (req, res) => {
