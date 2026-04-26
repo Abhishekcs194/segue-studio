@@ -1,296 +1,186 @@
+import 'dotenv/config';
 import express from 'express';
-import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import cookieParser from 'cookie-parser';
 import axios from 'axios';
-
-console.log('INIT: server.ts module loading...');
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const SPOTIFY_CLIENT_ID = process.env.SPOTIFY_CLIENT_ID;
 const SPOTIFY_CLIENT_SECRET = process.env.SPOTIFY_CLIENT_SECRET;
-const APP_URL = process.env.APP_URL;
+const LASTFM_API_KEY = process.env.LASTFM_API_KEY;
 
-async function startServer() {
-  const app = express();
-  const PORT = 3000;
+console.log('Config:', { hasSpotifyId: !!SPOTIFY_CLIENT_ID, hasLastfm: !!LASTFM_API_KEY });
 
-  app.use(express.json());
-  app.use(cookieParser());
+// Server-side Spotify token via Client Credentials (no user login needed)
+let cachedToken: string | null = null;
+let tokenExpiry = 0;
 
-  // Request logger for debugging
-  app.use((req, res, next) => {
-    const timestamp = new Date().toISOString();
-    console.log(`[${timestamp}] ${req.method} ${req.url}`);
-    next();
-  });
-
-  // Health check
-  app.get('/api-test', (req, res) => {
-    res.send('API TEST OK');
-  });
-
-  app.get('/api/ping', (req, res) => {
-    res.json({ 
-      status: 'ok', 
-      timestamp: new Date().toISOString(), 
-      env: { 
-        has_id: !!SPOTIFY_CLIENT_ID,
-        has_secret: !!SPOTIFY_CLIENT_SECRET,
-        app_url: APP_URL
-      }
-    });
-  });
-
-  // Dynamic URL helper
-  const getRedirectUri = (req: express.Request) => {
-    // Prefer the actual host the request came from to ensure consistency
-    const protocol = req.headers['x-forwarded-proto'] || 'http';
-    const host = req.headers['x-forwarded-host'] || req.headers.host;
-    const baseUrl = `${protocol}://${host}`;
-    return `${baseUrl}/auth/callback`;
-  };
-
-  app.get('/api/auth/url', (req, res) => {
-    try {
-      if (!SPOTIFY_CLIENT_ID || !SPOTIFY_CLIENT_SECRET) {
-        return res.status(500).json({ 
-          error: 'Spotify credentials missing. Please add SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET to Secrets.' 
-        });
-      }
-
-      const scope = 'playlist-modify-public user-read-private user-read-email';
-      const redirectUri = getRedirectUri(req);
-      
-      const params = new URLSearchParams({
-        client_id: SPOTIFY_CLIENT_ID,
-        response_type: 'code',
-        redirect_uri: redirectUri,
-        scope: scope,
-      });
-      
-      res.json({ url: `https://accounts.spotify.com/authorize?${params.toString()}` });
-    } catch (err: any) {
-      console.error('Error generating auth URL:', err);
-      res.status(500).json({ error: 'Failed to generate auth URL', details: err.message });
+async function getSpotifyToken(): Promise<string> {
+  if (cachedToken && Date.now() < tokenExpiry) return cachedToken;
+  const res = await axios.post(
+    'https://accounts.spotify.com/api/token',
+    new URLSearchParams({ grant_type: 'client_credentials' }).toString(),
+    {
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Authorization: `Basic ${Buffer.from(`${SPOTIFY_CLIENT_ID}:${SPOTIFY_CLIENT_SECRET}`).toString('base64')}`,
+      },
     }
-  });
-
-  app.get('/auth/callback', async (req, res) => {
-    const { code } = req.query;
-    if (!code) return res.status(400).send('No code provided');
-
-    try {
-      const response = await axios.post('https://accounts.spotify.com/api/token', 
-        new URLSearchParams({
-          grant_type: 'authorization_code',
-          code: code as string,
-          redirect_uri: getRedirectUri(req),
-          client_id: SPOTIFY_CLIENT_ID!,
-          client_secret: SPOTIFY_CLIENT_SECRET!,
-        }).toString(),
-        { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
-      );
-
-      const { access_token, refresh_token, expires_in } = response.data;
-
-      // Set cookies with required AI Studio settings
-      res.cookie('spotify_access_token', access_token, {
-        httpOnly: true,
-        secure: true,
-        sameSite: 'none',
-        maxAge: expires_in * 1000,
-      });
-
-      res.cookie('spotify_refresh_token', refresh_token, {
-        httpOnly: true,
-        secure: true,
-        sameSite: 'none',
-        maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
-      });
-
-      res.send(`
-        <html>
-          <body style="background: #111; color: #fff; font-family: sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh;">
-            <script>
-              if (window.opener) {
-                window.opener.postMessage({ type: 'OAUTH_AUTH_SUCCESS' }, '*');
-                window.close();
-              } else {
-                window.location.href = '/';
-              }
-            </script>
-            <p>Authentication successful. Closing window...</p>
-          </body>
-        </html>
-      `);
-    } catch (error: any) {
-      console.error('Auth error:', error.response?.data || error.message);
-      res.status(500).send('Authentication failed');
-    }
-  });
-
-  app.get('/api/user/me', async (req, res) => {
-    const token = req.cookies.spotify_access_token;
-    if (!token) return res.status(401).json({ error: 'Not authenticated' });
-
-    try {
-      const response = await axios.get('https://api.spotify.com/v1/me', {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      res.json(response.data);
-    } catch (error: any) {
-      res.status(error.response?.status || 500).json(error.response?.data || { error: 'Failed to fetch user' });
-    }
-  });
-
-  app.post('/api/playlist/generate', async (req, res) => {
-    const { startTrack, count = 10 } = req.body;
-    const token = req.cookies.spotify_access_token;
-
-    if (!token) return res.status(401).json({ error: 'Not authenticated' });
-
-    try {
-      // 1. Resolve start track
-      let trackId = '';
-      if (startTrack.includes('spotify.com/track/')) {
-        trackId = startTrack.split('track/')[1].split('?')[0];
-      } else {
-        const searchRes = await axios.get('https://api.spotify.com/v1/search', {
-          params: { q: startTrack, type: 'track', limit: 1 },
-          headers: { Authorization: `Bearer ${token}` }
-        });
-        if (searchRes.data.tracks.items.length === 0) {
-          return res.status(404).json({ error: 'Track not found' });
-        }
-        trackId = searchRes.data.tracks.items[0].id;
-      }
-
-      // 2. Fetch seed track details and artist details for genre anchoring
-      const seedTrackRes = await axios.get(`https://api.spotify.com/v1/tracks/${trackId}`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      const seedTrack = seedTrackRes.data;
-      const seedArtistId = seedTrack.artists[0].id;
-
-      // Fetch audio features for the baseline mood
-      const seedFeaturesRes = await axios.get(`https://api.spotify.com/v1/audio-features/${trackId}`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      const seedFeatures = seedFeaturesRes.data;
-
-      const playlistTracks = [seedTrack];
-      const trackIds = [trackId];
-
-      // 3. Recursive Segue Logic
-      for (let i = 0; i < count - 1; i++) {
-        const currentId = trackIds[trackIds.length - 1];
-        
-        // Get audio features of the PREVIOUS track for smooth segue
-        const featuresRes = await axios.get(`https://api.spotify.com/v1/audio-features/${currentId}`, {
-          headers: { Authorization: `Bearer ${token}` }
-        });
-        const features = featuresRes.data;
-
-        // Recommendations based on current track features + original track anchors
-        // We use seed_artists to keep genre consistent and seed_tracks for the segue
-        const recsRes = await axios.get('https://api.spotify.com/v1/recommendations', {
-          params: {
-            seed_tracks: currentId,
-            seed_artists: seedArtistId,
-            target_tempo: features.tempo,
-            target_key: features.key,
-            target_mode: features.mode,
-            target_energy: seedFeatures.energy, // Anchor to original mood
-            target_danceability: seedFeatures.danceability, // Anchor to original vibe
-            limit: 20
-          },
-          headers: { Authorization: `Bearer ${token}` }
-        });
-
-        // Pick a new track
-        let found = false;
-        for (const candidate of recsRes.data.tracks) {
-          if (!trackIds.includes(candidate.id)) {
-            playlistTracks.push(candidate);
-            trackIds.push(candidate.id);
-            found = true;
-            break;
-          }
-        }
-        if (!found) break; // End chain if no more unique tracks found
-      }
-
-      // 4. Create Playlist
-      const userRes = await axios.get('https://api.spotify.com/v1/me', {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      const userId = userRes.data.id;
-
-      const newPlaylistRes = await axios.post(`https://api.spotify.com/v1/users/${userId}/playlists`, {
-        name: `Segue: ${seedTrack.name}`,
-        description: `Smooth transitions starting from ${seedTrack.name}. Created with Segue App.`,
-        public: true
-      }, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-
-      const playlist = newPlaylistRes.data;
-
-      // 5. Add tracks to playlist
-      await axios.post(`https://api.spotify.com/v1/playlists/${playlist.id}/tracks`, {
-        uris: trackIds.map(id => `spotify:track:${id}`)
-      }, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-
-      res.json({
-        playlistUrl: playlist.external_urls.spotify,
-        tracks: playlistTracks.map(t => ({
-          name: t.name,
-          artist: t.artists[0].name,
-          id: t.id,
-          albumArt: t.album.images[0]?.url
-        }))
-      });
-
-    } catch (error: any) {
-      console.error('Playlist error:', error.response?.data || error.message);
-      res.status(500).json(error.response?.data || { error: 'Failed to generate playlist' });
-    }
-  });
-
-  app.post('/api/auth/logout', (req, res) => {
-    res.clearCookie('spotify_access_token', { secure: true, sameSite: 'none' });
-    res.clearCookie('spotify_refresh_token', { secure: true, sameSite: 'none' });
-    res.json({ success: true });
-  });
-
-  // Vite Integration (starts in background/async)
-  if (process.env.NODE_ENV !== 'production') {
-    console.log('INIT: Starting Vite dev server middleware...');
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'spa',
-    });
-    app.use(vite.middlewares);
-    console.log('READY: Vite middleware loaded.');
-  } else {
-    const distPath = path.join(__dirname, 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
-    });
-  }
-
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`READY: Server running at http://0.0.0.0:${PORT}`);
-  });
+  );
+  cachedToken = res.data.access_token;
+  tokenExpiry = Date.now() + (res.data.expires_in - 60) * 1000;
+  return cachedToken!;
 }
 
-console.log('INIT: Bootstrapping startServer()...');
-startServer().catch((err) => {
-  console.error('FAILED TO START SERVER:', err);
+async function getDeezerBPM(artist: string, track: string): Promise<number | null> {
+  try {
+    const search = await axios.get('https://api.deezer.com/search', {
+      params: { q: `${artist} ${track}`, limit: 1 },
+    });
+    const hit = search.data.data?.[0];
+    if (!hit) return null;
+    const details = await axios.get(`https://api.deezer.com/track/${hit.id}`);
+    const bpm = details.data.bpm;
+    return bpm && bpm > 0 ? bpm : null;
+  } catch {
+    return null;
+  }
+}
+
+async function getLastFmSimilar(artist: string, track: string): Promise<Array<{ name: string; artist: string }>> {
+  try {
+    const res = await axios.get('https://ws.audioscrobbler.com/2.0/', {
+      params: { method: 'track.getSimilar', artist, track, api_key: LASTFM_API_KEY, format: 'json', limit: 30 },
+    });
+    const tracks = res.data.similartracks?.track ?? [];
+    return tracks.map((t: any) => ({
+      name: t.name,
+      artist: typeof t.artist === 'string' ? t.artist : t.artist.name,
+    }));
+  } catch {
+    return [];
+  }
+}
+
+async function resolveSpotifyTrack(artist: string, track: string) {
+  try {
+    const token = await getSpotifyToken();
+    const res = await axios.get('https://api.spotify.com/v1/search', {
+      params: { q: `${artist} ${track}`.slice(0, 200), type: 'track', limit: 1 },
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const item = res.data.tracks?.items[0];
+    if (!item) return null;
+    return {
+      id: item.id,
+      name: item.name,
+      artist: item.artists[0].name,
+      albumArt: item.album.images[0]?.url,
+      spotifyUrl: item.external_urls.spotify,
+    };
+  } catch {
+    return null;
+  }
+}
+
+const app = express();
+const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3001;
+
+app.use(express.json());
+
+app.use((req, res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+  next();
+});
+
+app.post('/api/playlist/generate', async (req, res) => {
+  const { startTrack, count = 10 } = req.body;
+
+  try {
+    const token = await getSpotifyToken();
+
+    // 1. Resolve seed track
+    let seedData: any;
+    if (startTrack.includes('spotify.com/track/')) {
+      const trackId = startTrack.split('track/')[1].split('?')[0];
+      const r = await axios.get(`https://api.spotify.com/v1/tracks/${trackId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      seedData = r.data;
+    } else {
+      const r = await axios.get('https://api.spotify.com/v1/search', {
+        params: { q: startTrack.slice(0, 200), type: 'track', limit: 1 },
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!r.data.tracks.items.length) return res.status(404).json({ error: 'Track not found' });
+      seedData = r.data.tracks.items[0];
+    }
+
+    const seedName = seedData.name;
+    const seedArtist = seedData.artists[0].name;
+    const seedBPM = await getDeezerBPM(seedArtist, seedName);
+    console.log(`Seed: ${seedArtist} - ${seedName}, BPM: ${seedBPM}`);
+
+    const playlistTracks = [{
+      name: seedName,
+      artist: seedArtist,
+      id: seedData.id,
+      albumArt: seedData.album.images[0]?.url,
+      spotifyUrl: seedData.external_urls.spotify,
+      bpm: seedBPM,
+    }];
+
+    const usedKeys = new Set([`${seedArtist}:${seedName}`.toLowerCase()]);
+    let currentArtist = seedArtist;
+    let currentTrack = seedName;
+    let currentBPM = seedBPM;
+
+    // 2. Build chain
+    for (let i = 0; i < count - 1; i++) {
+      const similar = await getLastFmSimilar(currentArtist, currentTrack);
+      console.log(`Last.fm similar for "${currentTrack}": ${similar.length} results`);
+
+      const candidates = similar.filter(t => !usedKeys.has(`${t.artist}:${t.name}`.toLowerCase()));
+      if (!candidates.length) break;
+
+      const withBPM = await Promise.all(
+        candidates.slice(0, 8).map(async t => ({ ...t, bpm: await getDeezerBPM(t.artist, t.name) }))
+      );
+
+      let best = withBPM[0];
+      if (currentBPM) {
+        const hasBPM = withBPM.filter(t => t.bpm !== null);
+        if (hasBPM.length) {
+          hasBPM.sort((a, b) => Math.abs(a.bpm! - currentBPM!) - Math.abs(b.bpm! - currentBPM!));
+          best = hasBPM[0];
+        }
+      }
+
+      const spotify = await resolveSpotifyTrack(best.artist, best.name);
+      usedKeys.add(`${best.artist}:${best.name}`.toLowerCase());
+      if (!spotify) continue;
+
+      console.log(`Step ${i + 1}: ${best.artist} - ${best.name}, BPM: ${best.bpm}`);
+      playlistTracks.push({ ...spotify, bpm: best.bpm });
+      currentArtist = best.artist;
+      currentTrack = best.name;
+      currentBPM = best.bpm;
+    }
+
+    res.json({ tracks: playlistTracks });
+  } catch (error: any) {
+    console.error('Generate error:', error.response?.data || error.message);
+    res.status(500).json(error.response?.data || { error: 'Failed to generate' });
+  }
+});
+
+if (process.env.NODE_ENV === 'production') {
+  const distPath = path.join(__dirname, 'dist');
+  app.use(express.static(distPath));
+  app.get('*', (req, res) => res.sendFile(path.join(distPath, 'index.html')));
+}
+
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`API server running at http://0.0.0.0:${PORT}`);
 });

@@ -1,21 +1,16 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
-
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { 
-  Music, 
-  Search, 
-  Sparkles, 
-  ExternalLink, 
-  LogOut, 
-  Loader2, 
-  Disc, 
+import {
+  Music,
+  Search,
+  Sparkles,
+  ExternalLink,
+  Loader2,
+  Disc,
   ArrowRight,
+  AlertCircle,
+  Copy,
   CheckCircle2,
-  AlertCircle
 } from 'lucide-react';
 
 interface Track {
@@ -23,98 +18,20 @@ interface Track {
   artist: string;
   id: string;
   albumArt: string;
+  spotifyUrl: string;
+  bpm: number | null;
 }
 
-interface PlaylistResult {
-  playlistUrl: string;
+interface GenerateResult {
   tracks: Track[];
 }
 
 export default function App() {
-  const [user, setUser] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [query, setQuery] = useState('');
-  const [result, setResult] = useState<PlaylistResult | null>(null);
+  const [result, setResult] = useState<GenerateResult | null>(null);
   const [error, setError] = useState<{ message: string; details?: string } | null>(null);
-
-  useEffect(() => {
-    fetchUser();
-    
-    const handleMessage = (event: MessageEvent) => {
-      const origin = event.origin;
-      if (!origin.endsWith('.run.app') && !origin.includes('localhost')) return;
-      
-      if (event.data?.type === 'OAUTH_AUTH_SUCCESS') {
-        fetchUser();
-      }
-    };
-    
-    window.addEventListener('message', handleMessage);
-    return () => window.removeEventListener('message', handleMessage);
-  }, []);
-
-  const fetchUser = async () => {
-    try {
-      const res = await fetch('/api/user/me');
-      if (res.ok) {
-        const data = await res.json();
-        setUser(data);
-      } else {
-        setUser(null);
-      }
-    } catch (err) {
-      console.error('Failed to fetch user', err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleLogin = async () => {
-    try {
-      console.log('Initiating login...');
-      const res = await fetch('/api/auth/url');
-      const contentType = res.headers.get('content-type');
-      
-      console.log(`Response status: ${res.status}, content-type: ${contentType}`);
-
-      if (!contentType || !contentType.includes('application/json')) {
-        const text = await res.text();
-        console.error('Unexpected response:', text);
-        
-        // Try to ping the server to see if it's there at all
-        try {
-          const pingRes = await fetch('/api-test');
-          const pingText = await pingRes.text();
-          console.log('Ping /api-test result:', pingText);
-        } catch (pingErr) {
-          console.error('Ping /api-test failed:', pingErr);
-        }
-
-        setError({ 
-          message: `Server returned non-JSON response (${res.status}).`,
-          details: `Path: /api/auth/url\nStatus: ${res.status}\nBody: ${text.substring(0, 500)}`
-        });
-        return;
-      }
-
-      const data = await res.json();
-      
-      if (!res.ok) {
-        throw new Error(data.error || 'Failed to initiate login');
-      }
-
-      window.open(data.url, 'spotify_login', 'width=600,height=700');
-    } catch (err: any) {
-      setError({ message: err.message || 'Failed to initiate login' });
-    }
-  };
-
-  const handleLogout = async () => {
-    await fetch('/api/auth/logout', { method: 'POST' });
-    setUser(null);
-    setResult(null);
-  };
+  const [copied, setCopied] = useState(false);
 
   const generatePlaylist = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -128,22 +45,18 @@ export default function App() {
       const res = await fetch('/api/playlist/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ startTrack: query, count: 10 })
+        body: JSON.stringify({ startTrack: query, count: 10 }),
       });
 
       const contentType = res.headers.get('content-type');
-      if (!contentType || !contentType.includes('application/json')) {
+      if (!contentType?.includes('application/json')) {
         const text = await res.text();
-        setError({ 
-          message: `Generation failed with server error (${res.status}).`,
-          details: text.substring(0, 1000)
-        });
+        setError({ message: `Server error (${res.status})`, details: text.substring(0, 1000) });
         return;
       }
 
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to generate playlist');
-      
+      if (!res.ok) throw new Error(data.error || 'Failed to generate');
       setResult(data);
     } catch (err: any) {
       setError({ message: err.message });
@@ -152,17 +65,19 @@ export default function App() {
     }
   };
 
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-[#0a0a0a] flex items-center justify-center text-white">
-        <Loader2 className="w-8 h-8 animate-spin text-emerald-500" />
-      </div>
-    );
-  }
+  const copyTrackList = () => {
+    if (!result) return;
+    const text = result.tracks
+      .map((t, i) => `${i + 1}. ${t.artist} — ${t.name}${t.bpm ? ` (${Math.round(t.bpm)} BPM)` : ''}`)
+      .join('\n');
+    navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
 
   return (
     <div className="min-h-screen bg-[#050505] text-white font-sans selection:bg-emerald-500 selection:text-black flex flex-col relative overflow-x-hidden">
-      {/* Animated-style Mesh Background */}
+      {/* Background */}
       <div className="fixed inset-0 z-0 pointer-events-none">
         <div className="absolute top-[-10%] left-[-10%] w-[600px] h-[600px] rounded-full bg-purple-600/20 blur-[120px]" />
         <div className="absolute bottom-[-10%] right-[-10%] w-[600px] h-[600px] rounded-full bg-blue-600/20 blur-[120px]" />
@@ -177,95 +92,54 @@ export default function App() {
           </div>
           <h1 className="text-xl font-bold tracking-tight">Segue Studio</h1>
         </div>
-        
-        <div className="flex gap-6 items-center">
-          {user ? (
-            <>
-              <div className="hidden md:flex flex-col items-end text-right">
-                <span className="text-sm font-semibold tracking-tight">{user.display_name}</span>
-                <span className="text-[10px] text-white/40 uppercase tracking-widest font-bold">Connected • Premium</span>
-              </div>
-              <div className="flex items-center gap-4">
-                <button 
-                  onClick={handleLogout}
-                  className="w-10 h-10 rounded-full bg-white/5 border border-white/10 flex items-center justify-center hover:bg-white/10 transition-colors group"
-                >
-                  <LogOut className="w-4 h-4 text-white/50 group-hover:text-white transition-colors" />
-                </button>
-                {user.images?.[0]?.url && (
-                  <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-purple-500 to-blue-500 p-[1px]">
-                    <img src={user.images[0].url} alt="" className="w-full h-full rounded-full object-cover border border-black/20" />
-                  </div>
-                )}
-              </div>
-            </>
-          ) : (
-            <button 
-              onClick={handleLogin}
-              className="px-6 py-2 rounded-full bg-white text-black text-sm font-bold hover:scale-105 active:scale-95 transition-all shadow-xl"
-            >
-              Connect Spotify
-            </button>
-          )}
-        </div>
+        <span className="text-[10px] font-bold uppercase tracking-widest text-white/30 hidden md:block">
+          BPM-Matched Track Chains
+        </span>
       </nav>
 
-      {/* Main Content Layout */}
+      {/* Main Content */}
       <main className="relative z-10 flex-1 flex flex-col md:flex-row p-4 md:p-8 gap-8 max-w-7xl mx-auto w-full">
-        {/* Sidebar Input - 1/3 Width */}
+        {/* Sidebar */}
         <div className="w-full md:w-1/3 flex flex-col gap-6">
           <div className="p-6 md:p-8 rounded-[32px] bg-white/5 backdrop-blur-xl border border-white/10 shadow-2xl">
             <h2 className="text-xs font-bold uppercase tracking-[0.2em] text-emerald-400 mb-6 flex items-center gap-2">
               <Sparkles className="w-3 h-3" /> The Anchor Song
             </h2>
-            
-            {user ? (
-              <form onSubmit={generatePlaylist} className="space-y-6">
-                <div className="space-y-4">
-                  <label className="text-[10px] text-white/40 uppercase font-bold tracking-widest">Input Seed Song</label>
-                  <div className="relative group">
-                    <input 
-                      type="text" 
-                      value={query}
-                      onChange={(e) => setQuery(e.target.value)}
-                      placeholder="Spotify Link or Track Name..." 
-                      className="w-full bg-black/40 border border-white/10 rounded-2xl py-4 px-5 pr-14 text-sm focus:outline-none focus:border-emerald-500/50 transition-all placeholder:text-white/20"
-                      disabled={generating}
-                    />
-                    <button 
-                      type="submit"
-                      disabled={generating || !query}
-                      className="absolute right-2 top-2 p-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black transition-all disabled:opacity-30 active:scale-90"
-                    >
-                      {generating ? <Loader2 className="w-5 h-5 animate-spin" /> : <Search className="w-5 h-5" />}
-                    </button>
-                  </div>
-                </div>
 
-                <div className="pt-2">
-                  <div className="p-4 rounded-2xl bg-white/5 border border-white/10 flex items-start gap-3">
-                    <AlertCircle className="w-4 h-4 text-white/20 shrink-0 mt-0.5" />
-                    <p className="text-[11px] text-white/40 leading-relaxed italic">
-                      We'll generate a chain of 10 tracks that transition harmonically and match the BPM perfectly.
-                    </p>
-                  </div>
+            <form onSubmit={generatePlaylist} className="space-y-6">
+              <div className="space-y-4">
+                <label className="text-[10px] text-white/40 uppercase font-bold tracking-widest">
+                  Spotify Link or Track Name
+                </label>
+                <div className="relative group">
+                  <input
+                    type="text"
+                    value={query}
+                    onChange={e => setQuery(e.target.value)}
+                    placeholder="e.g. Safe And Sound or Spotify URL..."
+                    className="w-full bg-black/40 border border-white/10 rounded-2xl py-4 px-5 pr-14 text-sm focus:outline-none focus:border-emerald-500/50 transition-all placeholder:text-white/20"
+                    disabled={generating}
+                  />
+                  <button
+                    type="submit"
+                    disabled={generating || !query}
+                    className="absolute right-2 top-2 p-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black transition-all disabled:opacity-30 active:scale-90"
+                  >
+                    {generating ? <Loader2 className="w-5 h-5 animate-spin" /> : <Search className="w-5 h-5" />}
+                  </button>
                 </div>
-              </form>
-            ) : (
-              <div className="text-center py-6">
-                <Music className="w-12 h-12 text-white/10 mx-auto mb-4" />
-                <p className="text-white/40 text-sm mb-6">Authorize Spotify to start mixing your favorite tracks.</p>
-                <button 
-                  onClick={handleLogin}
-                  className="w-full py-4 rounded-2xl bg-white text-black font-black text-sm shadow-xl hover:scale-[1.02] active:scale-[0.98] transition-all"
-                >
-                  Connect Spotify
-                </button>
               </div>
-            )}
+
+              <div className="p-4 rounded-2xl bg-white/5 border border-white/10 flex items-start gap-3">
+                <AlertCircle className="w-4 h-4 text-white/20 shrink-0 mt-0.5" />
+                <p className="text-[11px] text-white/40 leading-relaxed italic">
+                  Generates 10 BPM-matched tracks. Copy the list and add them to a Spotify playlist manually.
+                </p>
+              </div>
+            </form>
           </div>
 
-          {/* Parameters / Stats Panel */}
+          {/* Mix Parameters Panel */}
           <div className="p-8 rounded-[32px] bg-white/5 backdrop-blur-xl border border-white/10 flex-1 hidden md:flex flex-col">
             <h2 className="text-[10px] font-bold uppercase tracking-[0.2em] text-white/40 mb-8">Mix Parameters</h2>
             <div className="space-y-8 flex-1">
@@ -275,41 +149,44 @@ export default function App() {
                   <span className="text-emerald-400">±3.5%</span>
                 </div>
                 <div className="h-1.5 bg-white/10 rounded-full overflow-hidden">
-                  <motion.div 
+                  <motion.div
                     initial={{ width: 0 }}
                     animate={{ width: '40%' }}
-                    className="h-full bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.5)]" 
+                    className="h-full bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.5)]"
                   />
                 </div>
               </div>
-              
+
               <div>
                 <div className="flex justify-between text-[10px] uppercase font-bold tracking-widest mb-3 text-white/30">
-                  <span>Harmonic Proximity</span>
-                  <span className="text-emerald-400">Adjacent (Camelot)</span>
+                  <span>Similarity Source</span>
+                  <span className="text-emerald-400">Last.fm</span>
                 </div>
                 <div className="flex gap-3">
-                  <div className="flex-1 py-3 rounded-xl bg-white/5 border border-emerald-500/30 flex items-center justify-center text-[10px] font-bold text-emerald-400">Same Key</div>
-                  <div className="flex-1 py-3 rounded-xl bg-white/5 border border-white/5 flex items-center justify-center text-[10px] font-bold text-white/20">Parallel</div>
+                  <div className="flex-1 py-3 rounded-xl bg-white/5 border border-emerald-500/30 flex items-center justify-center text-[10px] font-bold text-emerald-400">
+                    BPM Match
+                  </div>
+                  <div className="flex-1 py-3 rounded-xl bg-white/5 border border-white/5 flex items-center justify-center text-[10px] font-bold text-white/20">
+                    Deezer
+                  </div>
                 </div>
               </div>
-              
+
               <div className="pt-8">
                 <div className="text-4xl font-black italic tracking-tighter opacity-10 leading-none">
                   PERFECT<br />TRANSITION
                 </div>
               </div>
             </div>
-            
-            <p className="text-[10px] text-white/20 font-bold uppercase tracking-[0.3em] mt-auto">Algorithm Ver 1.4.2</p>
+            <p className="text-[10px] text-white/20 font-bold uppercase tracking-[0.3em] mt-auto">Algorithm Ver 2.0.0</p>
           </div>
         </div>
 
-        {/* Main Visualization Area - 2/3 Width */}
+        {/* Results Area */}
         <div className="flex-1 flex flex-col min-w-0">
           <AnimatePresence mode="wait">
             {!result ? (
-              <motion.div 
+              <motion.div
                 key="empty"
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
@@ -320,13 +197,15 @@ export default function App() {
                   <div className="absolute inset-0 bg-gradient-to-tr from-emerald-500/20 to-blue-500/20 opacity-0 group-hover:opacity-100 transition-opacity" />
                   <Music className="w-10 h-10 text-white/40 group-hover:text-emerald-400 transition-colors" />
                 </div>
-                <h3 className="text-5xl font-black tracking-tight mb-4">FLOW <span className="text-emerald-500">STATE.</span></h3>
+                <h3 className="text-5xl font-black tracking-tight mb-4">
+                  FLOW <span className="text-emerald-500">STATE.</span>
+                </h3>
                 <p className="text-white/40 max-w-sm font-medium leading-relaxed">
-                  Start your harmonic journey by entering a seed track in the sidebar. We'll handle the rest.
+                  Enter a seed track to generate a BPM-matched chain of 10 songs.
                 </p>
               </motion.div>
             ) : (
-              <motion.div 
+              <motion.div
                 key="results"
                 initial={{ opacity: 0, x: 20 }}
                 animate={{ opacity: 1, x: 0 }}
@@ -336,8 +215,12 @@ export default function App() {
                   <div>
                     <h3 className="text-3xl font-bold tracking-tight mb-1">Harmonic Sequence</h3>
                     <div className="flex items-center gap-3">
-                      <span className="text-[10px] font-bold uppercase tracking-widest text-emerald-500 bg-emerald-500/10 px-2 py-1 rounded border border-emerald-500/20">10 Segues</span>
-                      <span className="text-[10px] font-bold uppercase tracking-widest text-white/30 px-2 py-1 rounded bg-white/5 border border-white/10">BPM Matched</span>
+                      <span className="text-[10px] font-bold uppercase tracking-widest text-emerald-500 bg-emerald-500/10 px-2 py-1 rounded border border-emerald-500/20">
+                        {result.tracks.length} Tracks
+                      </span>
+                      <span className="text-[10px] font-bold uppercase tracking-widest text-white/30 px-2 py-1 rounded bg-white/5 border border-white/10">
+                        BPM Matched
+                      </span>
                     </div>
                   </div>
                   <button className="hidden md:flex items-center gap-2 px-4 py-2 rounded-full bg-white/5 border border-white/10 text-[10px] font-bold uppercase tracking-widest hover:bg-white/10 transition-all text-white/50 hover:text-white">
@@ -348,21 +231,33 @@ export default function App() {
 
                 <div className="flex-1 overflow-y-auto pr-2 space-y-4 custom-scrollbar">
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 relative">
-                    {/* The Connecting Line Visual */}
                     <div className="absolute left-[calc(50%-0.5px)] top-0 bottom-0 w-px bg-gradient-to-b from-transparent via-emerald-500/20 to-transparent hidden lg:block" />
 
                     {result.tracks.map((track, idx) => (
-                      <motion.div 
+                      <motion.a
                         key={track.id}
+                        href={track.spotifyUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
                         initial={{ opacity: 0, y: 10 }}
                         animate={{ opacity: 1, y: 0 }}
                         transition={{ delay: idx * 0.05 }}
                         className={`p-4 rounded-2xl backdrop-blur-md flex gap-4 items-center group cursor-pointer transition-all ${
                           idx % 2 === 1 ? 'lg:translate-y-6' : ''
-                        } ${idx === 0 ? 'bg-emerald-500/10 border border-emerald-500/40 shadow-[0_0_30px_rgba(16,185,129,0.1)]' : 'bg-white/5 border border-white/10 hover:bg-white/10'}`}
+                        } ${
+                          idx === 0
+                            ? 'bg-emerald-500/10 border border-emerald-500/40 shadow-[0_0_30px_rgba(16,185,129,0.1)]'
+                            : 'bg-white/5 border border-white/10 hover:bg-white/10'
+                        }`}
                       >
                         <div className="w-14 h-14 rounded-xl overflow-hidden shadow-2xl relative flex-shrink-0">
-                          <img src={track.albumArt} alt={track.name} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" />
+                          {track.albumArt && (
+                            <img
+                              src={track.albumArt}
+                              alt={track.name}
+                              className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
+                            />
+                          )}
                           <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
                             <ExternalLink className="w-5 h-5 text-white" />
                           </div>
@@ -371,39 +266,48 @@ export default function App() {
                           <div className={`text-[9px] font-black uppercase tracking-widest mb-1 ${idx === 0 ? 'text-emerald-400' : 'text-white/30'}`}>
                             {idx === 0 ? 'Seed Track' : `Segue 0${idx}`}
                           </div>
-                          <div className="text-sm font-bold truncate group-hover:text-emerald-400 transition-colors uppercase tracking-tight">{track.name}</div>
+                          <div className="text-sm font-bold truncate group-hover:text-emerald-400 transition-colors uppercase tracking-tight">
+                            {track.name}
+                          </div>
                           <div className="text-[10px] font-medium text-white/50 truncate italic">{track.artist}</div>
                         </div>
-                        
-                        {/* Status / Metadata badge */}
                         <div className="flex flex-col items-end gap-1 shrink-0">
-                          <div className="text-[10px] font-mono font-bold text-white/20">
-                            {idx === 0 ? '' : 'Harmonic'}
-                          </div>
-                          {idx > 0 && (
-                            <ArrowRight className="w-3 h-3 text-emerald-500 opacity-0 group-hover:opacity-100 transition-opacity" />
+                          {track.bpm && (
+                            <span className="text-[9px] font-mono font-bold text-white/30">
+                              {Math.round(track.bpm)} BPM
+                            </span>
                           )}
+                          <ArrowRight className="w-3 h-3 text-emerald-500 opacity-0 group-hover:opacity-100 transition-opacity" />
                         </div>
-                      </motion.div>
+                      </motion.a>
                     ))}
                   </div>
                 </div>
 
-                {/* Footer Action Card */}
-                <div className="mt-8 p-6 md:p-8 rounded-[32px] bg-emerald-500 text-black flex flex-col sm:flex-row items-center justify-between shadow-[0_0_50px_-12px_rgba(16,185,129,0.4)] relative overflow-hidden group">
+                {/* Footer Action */}
+                <div className="mt-8 p-6 md:p-8 rounded-[32px] bg-emerald-500 text-black flex flex-col sm:flex-row items-center justify-between shadow-[0_0_50px_-12px_rgba(16,185,129,0.4)] relative overflow-hidden">
                   <div className="absolute top-[-50%] left-[-10%] w-[200px] h-[200px] bg-white/20 blur-[60px] rounded-full pointer-events-none" />
                   <div className="relative z-10 text-center sm:text-left mb-6 sm:mb-0">
                     <h4 className="font-black text-2xl uppercase tracking-tighter leading-none mb-1">Ready to Flow.</h4>
-                    <p className="text-xs font-bold opacity-60 tracking-wider">Tracks blended with precision BPM matching.</p>
+                    <p className="text-xs font-bold opacity-60 tracking-wider">
+                      Click any track to open in Spotify, or copy the full list.
+                    </p>
                   </div>
-                  <div className="relative z-10 flex flex-col sm:flex-row gap-4 w-full sm:w-auto">
-                    <a 
-                      href={result.playlistUrl}
+                  <div className="relative z-10 flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
+                    <button
+                      onClick={copyTrackList}
+                      className="px-8 py-4 bg-black/20 hover:bg-black/30 text-black rounded-2xl font-black text-sm transition-all hover:scale-105 active:scale-95 flex items-center justify-center gap-2"
+                    >
+                      {copied ? <CheckCircle2 className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                      {copied ? 'Copied!' : 'Copy Track List'}
+                    </button>
+                    <a
+                      href={`https://open.spotify.com/track/${result.tracks[0]?.id}`}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="px-10 py-4 bg-white text-black rounded-2xl font-black text-sm transition-all hover:scale-105 active:scale-95 shadow-xl flex items-center justify-center gap-2"
+                      className="px-8 py-4 bg-white text-black rounded-2xl font-black text-sm transition-all hover:scale-105 active:scale-95 shadow-xl flex items-center justify-center gap-2"
                     >
-                      Open in Spotify
+                      Open Seed Track
                       <ExternalLink className="w-4 h-4" />
                     </a>
                   </div>
@@ -414,34 +318,27 @@ export default function App() {
 
           <AnimatePresence>
             {error && (
-              <motion.div 
+              <motion.div
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: 20 }}
-                className="mt-6 p-5 bg-red-500/10 border border-red-500/20 backdrop-blur-xl rounded-2xl text-red-400 flex flex-col gap-4 shadow-2xl overflow-hidden"
+                className="mt-6 p-5 bg-red-500/10 border border-red-500/20 backdrop-blur-xl rounded-2xl text-red-400 flex flex-col gap-4"
               >
                 <div className="flex items-center gap-4">
                   <div className="w-10 h-10 rounded-full bg-red-500/20 flex items-center justify-center shrink-0 border border-red-500/20">
-                    <AlertCircle className="w-5 h-5 flex-shrink-0" />
+                    <AlertCircle className="w-5 h-5" />
                   </div>
                   <div className="flex-1">
-                    <p className="text-[10px] font-bold uppercase tracking-widest mb-0.5 opacity-50 text-red-300">System Error</p>
+                    <p className="text-[10px] font-bold uppercase tracking-widest mb-0.5 opacity-50 text-red-300">Error</p>
                     <p className="text-sm font-bold tracking-tight">{error.message}</p>
                   </div>
-                  <button 
-                    onClick={() => setError(null)}
-                    className="text-red-400/50 hover:text-red-400 p-2 transition-colors"
-                  >
-                    <Music className="w-4 h-4 rotate-45" />
+                  <button onClick={() => setError(null)} className="text-red-400/50 hover:text-red-400 p-2 transition-colors">
+                    ✕
                   </button>
                 </div>
-                
                 {error.details && (
                   <div className="bg-black/60 rounded-xl p-4 border border-white/5 max-h-40 overflow-y-auto">
-                    <p className="text-[10px] font-mono text-white/40 mb-2 uppercase tracking-widest">Server Response Details:</p>
-                    <pre className="text-[10px] font-mono whitespace-pre-wrap opacity-60 leading-relaxed">
-                      {error.details}
-                    </pre>
+                    <pre className="text-[10px] font-mono whitespace-pre-wrap opacity-60 leading-relaxed">{error.details}</pre>
                   </div>
                 )}
               </motion.div>
@@ -450,7 +347,6 @@ export default function App() {
         </div>
       </main>
 
-      {/* Styled Footer */}
       <footer className="relative z-10 py-12 px-8 flex flex-col md:flex-row justify-between items-center gap-6 mt-12 bg-white/[0.02] border-t border-white/[0.05] backdrop-blur-xl">
         <div className="flex items-center gap-3 opacity-30 grayscale brightness-200">
           <Music className="w-5 h-5" />
