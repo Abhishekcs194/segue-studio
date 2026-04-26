@@ -36,7 +36,7 @@ export default function App() {
   const [generating, setGenerating] = useState(false);
   const [query, setQuery] = useState('');
   const [result, setResult] = useState<PlaylistResult | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ message: string; details?: string } | null>(null);
 
   useEffect(() => {
     fetchUser();
@@ -78,7 +78,11 @@ export default function App() {
       if (!contentType || !contentType.includes('application/json')) {
         const text = await res.text();
         console.error('Unexpected response:', text);
-        throw new Error(`Server returned non-JSON response (${res.status}). It might be still starting up.`);
+        setError({ 
+          message: `Server returned non-JSON response (${res.status}).`,
+          details: text.substring(0, 1000) // First 1000 chars of the error page
+        });
+        return;
       }
 
       const data = await res.json();
@@ -89,7 +93,7 @@ export default function App() {
 
       window.open(data.url, 'spotify_login', 'width=600,height=700');
     } catch (err: any) {
-      setError(err.message || 'Failed to initiate login');
+      setError({ message: err.message || 'Failed to initiate login' });
     }
   };
 
@@ -114,12 +118,22 @@ export default function App() {
         body: JSON.stringify({ startTrack: query, count: 10 })
       });
 
+      const contentType = res.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        const text = await res.text();
+        setError({ 
+          message: `Generation failed with server error (${res.status}).`,
+          details: text.substring(0, 1000)
+        });
+        return;
+      }
+
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to generate playlist');
       
       setResult(data);
     } catch (err: any) {
-      setError(err.message);
+      setError({ message: err.message });
     } finally {
       setGenerating(false);
     }
@@ -391,21 +405,32 @@ export default function App() {
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: 20 }}
-                className="mt-6 p-5 bg-red-500/10 border border-red-500/20 backdrop-blur-xl rounded-2xl text-red-400 flex items-center gap-4 shadow-2xl"
+                className="mt-6 p-5 bg-red-500/10 border border-red-500/20 backdrop-blur-xl rounded-2xl text-red-400 flex flex-col gap-4 shadow-2xl overflow-hidden"
               >
-                <div className="w-10 h-10 rounded-full bg-red-500/20 flex items-center justify-center shrink-0 border border-red-500/20">
-                  <AlertCircle className="w-5 h-5 flex-shrink-0" />
+                <div className="flex items-center gap-4">
+                  <div className="w-10 h-10 rounded-full bg-red-500/20 flex items-center justify-center shrink-0 border border-red-500/20">
+                    <AlertCircle className="w-5 h-5 flex-shrink-0" />
+                  </div>
+                  <div className="flex-1">
+                    <p className="text-[10px] font-bold uppercase tracking-widest mb-0.5 opacity-50 text-red-300">System Error</p>
+                    <p className="text-sm font-bold tracking-tight">{error.message}</p>
+                  </div>
+                  <button 
+                    onClick={() => setError(null)}
+                    className="text-red-400/50 hover:text-red-400 p-2 transition-colors"
+                  >
+                    <Music className="w-4 h-4 rotate-45" />
+                  </button>
                 </div>
-                <div className="flex-1">
-                  <p className="text-[10px] font-bold uppercase tracking-widest mb-0.5 opacity-50 text-red-300">System Error</p>
-                  <p className="text-sm font-bold tracking-tight">{error}</p>
-                </div>
-                <button 
-                  onClick={() => setError(null)}
-                  className="text-red-400/50 hover:text-red-400 p-2 transition-colors"
-                >
-                  <Loader2 className="w-4 h-4 rotate-45" />
-                </button>
+                
+                {error.details && (
+                  <div className="bg-black/60 rounded-xl p-4 border border-white/5 max-h-40 overflow-y-auto">
+                    <p className="text-[10px] font-mono text-white/40 mb-2 uppercase tracking-widest">Server Response Details:</p>
+                    <pre className="text-[10px] font-mono whitespace-pre-wrap opacity-60 leading-relaxed">
+                      {error.details}
+                    </pre>
+                  </div>
+                )}
               </motion.div>
             )}
           </AnimatePresence>

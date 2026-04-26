@@ -21,6 +21,12 @@ async function startServer() {
   app.use(express.json());
   app.use(cookieParser());
 
+  // Request logger for debugging
+  app.use((req, res, next) => {
+    console.log(`${req.method} ${req.url}`);
+    next();
+  });
+
   // Health check
   app.get('/api/ping', (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
